@@ -75,6 +75,7 @@
     </style>
   </head>
   <body>
+    <script>window.coi = { coepCredentialless: () => true };</script>
     <script src="coi-serviceworker.js"></script>
 
     <div style="height: 100vh" id="inputSection" class="row">
@@ -126,39 +127,21 @@
       function resizeHandler() {
         let w = Math.floor(Math.floor(window.innerWidth * window.devicePixelRatio) / window.devicePixelRatio);
         let h = Math.floor(Math.floor(window.innerHeight * window.devicePixelRatio) / window.devicePixelRatio);
-        if(preloadElement.hidden === true) {
-          Module.ccall('nativeResize', 'number', ['number', 'number'], [w * window.devicePixelRatio, h * window.devicePixelRatio]);
-        }
         Module.canvas.style.width = w + 'px';
         Module.canvas.style.height = h + 'px';
       }
 
       var Module = {
-        preRun: [],
+        preRun: [function() {
+          if (Module['traceData']) {
+            FS.writeFile('/embed.tracy', new Uint8Array(Module['traceData']));
+          }
+        }],
         postRun: [],
         print: (function() {
           return function(text) {
             if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
             console.log(text);
-          };
-        })(),
-        locateFile: (function() {
-          return function(path) {
-            if (path == "tracy-profiler.data")
-              return path;
-            return path;
-          }
-        })(),
-        packageMetadata: (function() {
-          return function() {
-            return {
-              "files": [{
-                  "filename":"/embed.tracy",
-                  "start":0,
-                  "end":Module['traceSize'],
-              }],
-              "remote_package_size":Module['traceSize'],
-            };
           };
         })(),
         canvas: (function() {
@@ -231,10 +214,6 @@
         });
       }
 
-      Module.getPreloadedPackage = function(remotePackageName, remotePackageSize) {
-        return Module['downloadedData'];
-      }
-
       function download(url) {
         return new Promise(function(resolve, reject) {
           var xhr = new XMLHttpRequest();
@@ -258,9 +237,8 @@
       if (trace !== null) {
         document.getElementById("inputSection").style.display = 'none';
         document.getElementById("emscriptenSection").style.display = 'block';
-        Module['traceSize'] = urlParams.get('size');
         download(trace).then(function(data) {
-          Module['downloadedData'] = data;
+          Module['traceData'] = data;
           download('tracy-profiler.js').then(function(data) {
             Module['mainScriptUrlOrBlob'] = new Blob([data], { type: 'application/javascript' });
             addScriptToDom(data);
@@ -274,8 +252,7 @@
         let file = input.files[0];
         let reader = new FileReader();
         reader.onload = function(event) {
-          Module['downloadedData'] = reader.result;
-          Module['traceSize'] = reader.result.byteLength;
+          Module['traceData'] = reader.result;
 
           download('tracy-profiler.js').then(function(data) {
             Module['mainScriptUrlOrBlob'] = new Blob([data], { type: 'application/javascript' });
@@ -301,9 +278,13 @@
 
         // Side step CORS restrictions at github.com by computing the redirect ourselves
         const github_url = /^https?:\/\/github\.com\/([^\/\r\n]*)\/([^\/\r\n]*)\/(?:raw|blob)\/([^\?\r\n]*)(?:\?raw=true)?/;
+        const gist_url = /^https?:\/\/gist\.github\.com\/([^\/\r\n]*)\/([^\/\r\n]*)\/raw\/([^\?\r\n]*)/;
         const matches = github_url.exec(url);
+        const gist_matches = gist_url.exec(url);
         if (matches)
           input.value = `https://raw.githubusercontent.com/${matches.slice(1).join("/")}`;
+        else if (gist_matches)
+          input.value = `https://gist.githubusercontent.com/${gist_matches[1]}/${gist_matches[2]}/raw/${gist_matches[3]}`;
 
         download(input.value).then(function(data){
           window.location.href = base_url.concat(encodeURIComponent(input.value), "&size=", data.byteLength);
