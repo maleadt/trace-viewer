@@ -5,6 +5,7 @@
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <link rel="icon" href="favicon.svg">
     <title>Tracy Profiler</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-KK94CHFLLe+nY2dmCWGMq91rCGa5gtU4mk92HdvYe+M/SXH301p5ILy+dN9+nJOZ" crossorigin="anonymous">
     <style>
       body {
         font-family: arial;
@@ -75,14 +76,45 @@
   </head>
   <body>
     <script src="coi-serviceworker.js"></script>
-    <div id="preload">
-      <div class="spinner" id='spinner'></div>
-      <div class="emscripten" id="status">Downloading...</div>
+
+    <div style="height: 100vh" id="inputSection" class="row">
+      <div class="col my-auto">
+        <div width="60%" class="row text-center justify-content-center">
+          <div class="col-7">
+            <label for="tracefile" class="form-label">Open your <code>.tracy</code> file</label>
+            <input class="form-control form-control-lg" id="tracefile" accept=".tracy" type="file" onchange="startTracy(this)">
+          </div>
+        </div>
+        <br />
+        <div width="60%" class="row justify-content-center">
+          <div class="col-7"><hr /></div>
+        </div>
+        <br />
+        <div width="60%" class="row justify-content-center">
+          <div class="text-center"><p>Create a viewer URL for a <code>.tracy</code> file already on the Web</p></div>
+          <div class="col-auto">
+            <button class="btn btn-primary mb-3" onclick="makeTracyURL()">View Online Trace</button>
+          </div>
+          <div class="col-6">
+            <label for="inputTraceFileURL" class="visually-hidden">URL for .tracy file</label>
+            <input type="text" class="form-control" id="inputTraceFileURL" placeholder="URL for .tracy file">
+            <p id="url-error" class="text-danger" style="display: none;">File download failed. You may have provided an incorrect URL.<br /><br />If the URL is correct, loading the file may be disallowed by the host's <a href="https://stackoverflow.com/a/35553666">CORS</a> policy.<br />Check your JavaScript console for more information.</p>
+            <p id="specific-url-error" class="text-danger" style="display: none;">File download failed.</p>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div class="emscripten">
-      <progress value="0" max="100" id="progress" hidden=1></progress>
-      <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+    <div id="emscriptenSection" style="display: none;">
+      <div id="preload">
+        <div class="spinner" id='spinner'></div>
+        <div class="emscripten" id="status">Downloading...</div>
+      </div>
+
+      <div class="emscripten">
+        <progress value="0" max="100" id="progress" hidden=1></progress>
+        <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+      </div>
     </div>
 
     <script type='text/javascript'>
@@ -90,6 +122,16 @@
       var progressElement = document.getElementById('progress');
       var spinnerElement = document.getElementById('spinner');
       var preloadElement = document.getElementById('preload');
+
+      function resizeHandler() {
+        let w = Math.floor(Math.floor(window.innerWidth * window.devicePixelRatio) / window.devicePixelRatio);
+        let h = Math.floor(Math.floor(window.innerHeight * window.devicePixelRatio) / window.devicePixelRatio);
+        if(preloadElement.hidden === true) {
+          Module.ccall('nativeResize', 'number', ['number', 'number'], [w * window.devicePixelRatio, h * window.devicePixelRatio]);
+        }
+        Module.canvas.style.width = w + 'px';
+        Module.canvas.style.height = h + 'px';
+      }
 
       var Module = {
         preRun: [],
@@ -100,12 +142,28 @@
             console.log(text);
           };
         })(),
+        locateFile: (function() {
+          return function(path) {
+            if (path == "tracy-profiler.data")
+              return path;
+            return path;
+          }
+        })(),
+        packageMetadata: (function() {
+          return function() {
+            return {
+              "files": [{
+                  "filename":"/embed.tracy",
+                  "start":0,
+                  "end":Module['traceSize'],
+              }],
+              "remote_package_size":Module['traceSize'],
+            };
+          };
+        })(),
         canvas: (function() {
           var canvas = document.getElementById('canvas');
 
-          // As a default initial behavior, pop up an alert when webgl context is lost. To make your
-          // application robust, you may want to override this behavior before shipping!
-          // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
           canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
 
           return canvas;
@@ -115,7 +173,7 @@
           if (text === Module.setStatus.last.text) return;
           var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
           var now = Date.now();
-          if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
+          if (m && now - Module.setStatus.last.time < 30) return;
           Module.setStatus.last.time = now;
           Module.setStatus.last.text = text;
           if (m) {
@@ -131,6 +189,7 @@
             progressElement.hidden = true;
             preloadElement.hidden = true;
             spinnerElement.style.display = 'none';
+            resizeHandler();
           }
           statusElement.innerHTML = text;
         },
@@ -142,14 +201,123 @@
       };
       Module.setStatus('Downloading...');
       window.onerror = function(event) {
-        // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
         Module.setStatus('Exception thrown, see JavaScript console');
         spinnerElement.style.display = 'none';
         Module.setStatus = function(text) {
           if (text) console.error('[post-exception status] ' + text);
         };
       };
+      addEventListener('resize', resizeHandler);
+      resizeHandler();
+
+      function addScriptToDom(scriptCode) {
+        return new Promise(function(resolve, reject) {
+          var script = document.createElement('script');
+          var blob = new Blob([scriptCode], { type: 'application/javascript' });
+          var objectUrl = URL.createObjectURL(blob);
+          script.src = objectUrl;
+          script.onload = function() {
+            script.onload = script.onerror = null;
+            URL.revokeObjectURL(objectUrl);
+            resolve();
+          }
+          script.onerror = function(e) {
+            script.onload = script.onerror = null;
+            URL.revokeObjectURL(objectUrl);
+            console.error('script failed to add to dom: ' + e);
+            reject(e.message || "(out of memory?)");
+          }
+          document.body.appendChild(script);
+        });
+      }
+
+      Module.getPreloadedPackage = function(remotePackageName, remotePackageSize) {
+        return Module['downloadedData'];
+      }
+
+      function download(url) {
+        return new Promise(function(resolve, reject) {
+          var xhr = new XMLHttpRequest();
+          xhr.open('GET', url, true);
+          xhr.responseType = 'arraybuffer';
+          xhr.onload = function() {
+            if (xhr.status == 200 || xhr.status == 0) {
+              resolve(xhr.response);
+            } else {
+              reject(xhr);
+            }
+          };
+          xhr.onerror = function(e) { reject(xhr); };
+          xhr.send(null);
+        });
+      }
+
+      const queryString = window.location.search;
+      const urlParams = new URLSearchParams(queryString);
+      const trace = urlParams.get('trace');
+      if (trace !== null) {
+        document.getElementById("inputSection").style.display = 'none';
+        document.getElementById("emscriptenSection").style.display = 'block';
+        Module['traceSize'] = urlParams.get('size');
+        download(trace).then(function(data) {
+          Module['downloadedData'] = data;
+          download('tracy-profiler.js').then(function(data) {
+            Module['mainScriptUrlOrBlob'] = new Blob([data], { type: 'application/javascript' });
+            addScriptToDom(data);
+          });
+        });
+      }
+
+      function startTracy(input) {
+        document.getElementById("inputSection").style.display = 'none';
+        document.getElementById("emscriptenSection").style.display = 'block';
+        let file = input.files[0];
+        let reader = new FileReader();
+        reader.onload = function(event) {
+          Module['downloadedData'] = reader.result;
+          Module['traceSize'] = reader.result.byteLength;
+
+          download('tracy-profiler.js').then(function(data) {
+            Module['mainScriptUrlOrBlob'] = new Blob([data], { type: 'application/javascript' });
+            addScriptToDom(data);
+          });
+        };
+        reader.readAsArrayBuffer(file);
+      }
+
+      function makeTracyURL() {
+        const input = document.getElementById("inputTraceFileURL");
+        const url = input.value;
+
+        const base_url = window.location.origin + window.location.pathname + "?trace=";
+        if (url.startsWith(base_url))
+          return;
+
+        document.getElementById("url-error").style.display = 'none';
+        document.getElementById("specific-url-error").style.display = 'none';
+
+        if (url == "")
+          return;
+
+        // Side step CORS restrictions at github.com by computing the redirect ourselves
+        const github_url = /^https?:\/\/github\.com\/([^\/\r\n]*)\/([^\/\r\n]*)\/(?:raw|blob)\/([^\?\r\n]*)(?:\?raw=true)?/;
+        const matches = github_url.exec(url);
+        if (matches)
+          input.value = `https://raw.githubusercontent.com/${matches.slice(1).join("/")}`;
+
+        download(input.value).then(function(data){
+          window.location.href = base_url.concat(encodeURIComponent(input.value), "&size=", data.byteLength);
+        }).catch(function(xhr){
+          if (xhr.status == 0) {
+            document.getElementById("url-error").style.display = 'block';
+          } else {
+            const element = document.getElementById("specific-url-error");
+            element.style.display = 'block';
+            element.innerHTML = "File download failed. (HTTP Error " + xhr.status + ")";
+          }
+        });
+      }
     </script>
-    <script async type="text/javascript" src="tracy-profiler.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha3/dist/js/bootstrap.bundle.min.js" integrity="sha384-ENjdO4Dr2bkBIFxQpeoTz1HIcje39Wm4jDKdf19U8gI4ddQ3GYNS7NTKfAdVQSZe" crossorigin="anonymous"></script>
   </body>
 </html>
